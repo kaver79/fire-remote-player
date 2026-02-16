@@ -7,6 +7,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
 import io.ktor.server.application.call
+import io.ktor.server.application.install
 import io.ktor.server.cio.CIO
 import io.ktor.server.engine.ApplicationEngine
 import io.ktor.server.engine.embeddedServer
@@ -70,12 +71,12 @@ class HttpRemoteServer(
                 }
 
                 get("/api/status") {
-                    if (!authorizeApiCall()) return@get
+                    if (!call.authorizeApiCall()) return@get
                     call.respond(statusProvider())
                 }
 
                 post("/api/load") {
-                    if (!authorizeApiCall()) return@post
+                    if (!call.authorizeApiCall()) return@post
                     val req = call.receive<LoadRequest>()
                     if (req.url.isBlank()) {
                         call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "url is required"))
@@ -86,25 +87,25 @@ class HttpRemoteServer(
                 }
 
                 post("/api/play") {
-                    if (!authorizeApiCall()) return@post
+                    if (!call.authorizeApiCall()) return@post
                     handler.play()
                     call.respond(ApiResponse(true, "playing"))
                 }
 
                 post("/api/pause") {
-                    if (!authorizeApiCall()) return@post
+                    if (!call.authorizeApiCall()) return@post
                     handler.pause()
                     call.respond(ApiResponse(true, "paused"))
                 }
 
                 post("/api/stop") {
-                    if (!authorizeApiCall()) return@post
+                    if (!call.authorizeApiCall()) return@post
                     handler.stop()
                     call.respond(ApiResponse(true, "stopped"))
                 }
 
                 post("/api/seek") {
-                    if (!authorizeApiCall()) return@post
+                    if (!call.authorizeApiCall()) return@post
                     val req = call.receive<SeekRequest>()
                     handler.seek(req.positionMs)
                     call.respond(ApiResponse(true, "seeked"))
