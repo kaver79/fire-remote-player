@@ -26,6 +26,7 @@ interface RemoteCommandHandler {
     fun pause()
     fun stop()
     fun seek(positionMs: Long)
+    fun setVolume(volume: Float)
 }
 
 class HttpRemoteServer(
@@ -38,7 +39,9 @@ class HttpRemoteServer(
 
     fun start() {
         if (server != null) return
-        server = embeddedServer(CIO, port = port, module = ::configure).start(wait = false)
+        server = embeddedServer(CIO, port = port) {
+            configure(this)
+        }.start(wait = false)
     }
 
     fun stop() {
@@ -109,6 +112,13 @@ class HttpRemoteServer(
                     val req = call.receive<SeekRequest>()
                     handler.seek(req.positionMs)
                     call.respond(ApiResponse(true, "seeked"))
+                }
+
+                post("/api/volume") {
+                    if (!call.authorizeApiCall()) return@post
+                    val req = call.receive<VolumeRequest>()
+                    handler.setVolume(req.volume)
+                    call.respond(ApiResponse(true, "volume updated"))
                 }
             }
         }
@@ -197,6 +207,12 @@ class HttpRemoteServer(
             <button onclick="seekBy(10000)">+10s</button>
           </div>
 
+          <div class="row">
+            <button onclick="setVolumeDelta(-0.1)">Vol-</button>
+            <button onclick="setVolumeDelta(0.1)">Vol+</button>
+            <button onclick="setVolume(0)">Mute</button>
+          </div>
+
           <h3>Status</h3>
           <div id="status">loading...</div>
 
@@ -231,6 +247,18 @@ class HttpRemoteServer(
               const s = await statusRes.json();
               const next = Math.max(0, (s.positionMs || 0) + delta);
               await send('/api/seek', { positionMs: next });
+            }
+
+            async function setVolume(value) {
+              const v = Math.max(0, Math.min(1, value));
+              await send('/api/volume', { volume: v });
+            }
+
+            async function setVolumeDelta(delta) {
+              const statusRes = await fetch('/api/status', { headers: { 'X-PIN': pin } });
+              if (!statusRes.ok) return;
+              const s = await statusRes.json();
+              await setVolume((s.volume || 0) + delta);
             }
 
             async function refresh() {

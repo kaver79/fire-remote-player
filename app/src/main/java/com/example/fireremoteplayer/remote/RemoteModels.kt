@@ -14,6 +14,11 @@ data class SeekRequest(
 )
 
 @Serializable
+data class VolumeRequest(
+    val volume: Float
+)
+
+@Serializable
 data class ApiResponse(
     val ok: Boolean,
     val message: String
@@ -25,5 +30,6 @@ data class PlayerStatus(
     val isPlaying: Boolean,
     val positionMs: Long,
     val durationMs: Long,
-    val lastCommand: String
+    val lastCommand: String,
+    val volume: Float
 )
