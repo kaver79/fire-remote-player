@@ -1,4 +1,4 @@
-FROM gradle:8.7-jdk17
+FROM --platform=linux/amd64 gradle:8.7-jdk17
 
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \

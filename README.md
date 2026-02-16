@@ -39,7 +39,7 @@ gradle wrapper
 Build debug APK in Docker (no local Android SDK needed):
 
 ```bash
-docker build -t fire-remote-player-builder .
+docker build --platform=linux/amd64 -t fire-remote-player-builder .
 ```
 
 Extract APK from container:
