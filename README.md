@@ -53,6 +53,17 @@ docker rm fire-builder
 Output APK:
 - `./app-debug.apk` (after `docker cp`)
 
+## GitHub Actions
+
+- CI build workflow: `.github/workflows/android-build.yml`
+- Release workflow: `.github/workflows/android-release.yml`
+
+How it works:
+
+1. Every push/PR to `main` builds `app-debug.apk` and uploads it as a workflow artifact.
+2. Pushing a tag like `v1.0.0` builds release APK and publishes a GitHub Release with:
+   `fire-remote-player-v1.0.0.apk`
+
 ## Use it
 
 1. Connect tablet and phone to the same Wi-Fi network.
