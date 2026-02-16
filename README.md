@@ -12,17 +12,17 @@ Android app for Fire tablets that plays video/streams and exposes a phone-friend
 
 ## Project layout
 
-- `/Users/okuznetsov/Documents/New project/app/src/main/java/com/example/fireremoteplayer/MainActivity.kt`
-- `/Users/okuznetsov/Documents/New project/app/src/main/java/com/example/fireremoteplayer/player/PlayerViewModel.kt`
-- `/Users/okuznetsov/Documents/New project/app/src/main/java/com/example/fireremoteplayer/remote/HttpRemoteServer.kt`
-- `/Users/okuznetsov/Documents/New project/app/src/main/java/com/example/fireremoteplayer/ui/MainScreen.kt`
+- `app/src/main/java/com/example/fireremoteplayer/MainActivity.kt`
+- `app/src/main/java/com/example/fireremoteplayer/player/PlayerViewModel.kt`
+- `app/src/main/java/com/example/fireremoteplayer/remote/HttpRemoteServer.kt`
+- `app/src/main/java/com/example/fireremoteplayer/ui/MainScreen.kt`
 
 ## Build and install
 
 This repo includes Gradle wrapper scripts and properties.
 `gradle/wrapper/gradle-wrapper.jar` is still required and must be generated once on your machine.
 
-1. Open `/Users/okuznetsov/Documents/New project` in Android Studio.
+1. Open the project root in Android Studio.
 2. When prompted, use Android Studio's embedded Gradle/JDK.
 3. Build the `app` module.
 4. Enable Developer Options + ADB on your Fire tablet.
@@ -51,7 +51,7 @@ docker rm fire-builder
 ```
 
 Output APK:
-- `/Users/okuznetsov/Documents/New project/app-debug.apk` (after `docker cp`)
+- `./app-debug.apk` (after `docker cp`)
 
 ## Use it
 
