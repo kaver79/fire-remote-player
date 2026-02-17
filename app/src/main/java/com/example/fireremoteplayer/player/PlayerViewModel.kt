@@ -35,6 +35,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.Inet4Address
 import java.net.NetworkInterface
+import kotlin.math.roundToInt
 
 private const val REMOTE_PORT = 8080
 private const val REMOTE_PIN = "2468"
@@ -65,6 +66,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
 
     private var currentLocalUri: Uri? = null
     private var currentLocalLabel: String = ""
+    private var primeOpenedByApp: Boolean = false
     private val audioManager = application.getSystemService(AudioManager::class.java)
     private var audioFocusRequest: AudioFocusRequest? = null
 
@@ -141,7 +143,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
                     val mp = vlcPlayer
                     val pos = mp?.time?.coerceAtLeast(0L) ?: 0L
                     val len = mp?.length?.takeIf { it > 0 } ?: 0L
-                    val vol = ((mp?.volume ?: 100).coerceIn(0, 100) / 100f)
+                    val vol = currentSystemVolumeRatio()
                     _uiState.value = state.copy(
                         positionMs = pos,
                         durationMs = len,
@@ -425,23 +427,20 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
 
     fun setVolumeLevel(volume: Float) {
         val clamped = volume.coerceIn(0f, 1f)
+        setSystemVolumeRatio(clamped)
         if (_uiState.value.useVlc) {
             vlcPlayer?.volume = (clamped * 100).toInt().coerceIn(0, 100)
         } else {
             player.volume = clamped
         }
         _uiState.value = _uiState.value.copy(
-            volume = clamped,
-            lastCommand = "Volume ${(clamped * 100).toInt()}%"
+            volume = currentSystemVolumeRatio(),
+            lastCommand = "Volume ${(currentSystemVolumeRatio() * 100).toInt()}%"
         )
     }
 
     fun adjustVolume(delta: Float) {
-        val current = if (_uiState.value.useVlc) {
-            ((vlcPlayer?.volume ?: 100).coerceIn(0, 100) / 100f)
-        } else {
-            player.volume
-        }
+        val current = currentSystemVolumeRatio()
         setVolumeLevel(current + delta)
     }
 
@@ -457,6 +456,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
 
         runCatching {
             app.startActivity(launchIntent)
+            primeOpenedByApp = true
             _uiState.value = _uiState.value.copy(
                 lastCommand = "Opened Prime Video"
             )
@@ -478,6 +478,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
                 addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
             }
             app.startActivity(intent)
+            primeOpenedByApp = false
             _uiState.value = _uiState.value.copy(
                 lastCommand = "Player moved to foreground"
             )
@@ -554,6 +555,14 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         }
     }
 
+    fun togglePrimeApp() {
+        if (primeOpenedByApp) {
+            bringPlayerToForegroundApp()
+        } else {
+            openPrimeVideoApp()
+        }
+    }
+
     private fun containsOutOfMemory(error: PlaybackException): Boolean {
         var cause: Throwable? = error
         while (cause != null) {
@@ -563,6 +572,20 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
             cause = cause.cause
         }
         return false
+    }
+
+    private fun currentSystemVolumeRatio(): Float {
+        val manager = audioManager ?: return 1f
+        val max = manager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+        val current = manager.getStreamVolume(AudioManager.STREAM_MUSIC).coerceIn(0, max)
+        return current.toFloat() / max.toFloat()
+    }
+
+    private fun setSystemVolumeRatio(ratio: Float) {
+        val manager = audioManager ?: return
+        val max = manager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+        val target = (ratio.coerceIn(0f, 1f) * max).roundToInt().coerceIn(0, max)
+        manager.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
     }
 
     override fun load(url: String, autoPlay: Boolean) {
@@ -595,6 +618,10 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
 
     override fun bringPlayerToForeground() {
         runOnMain { bringPlayerToForegroundApp() }
+    }
+
+    override fun togglePrimeVideo() {
+        runOnMain { togglePrimeApp() }
     }
 
     override fun restartRemoteServer() {

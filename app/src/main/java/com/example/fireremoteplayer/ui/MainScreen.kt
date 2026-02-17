@@ -9,16 +9,22 @@ import android.provider.DocumentsContract
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -44,6 +50,7 @@ fun MainScreen(
     val context = LocalContext.current
     var streamUrl by remember { mutableStateOf("") }
     var isFullscreen by remember { mutableStateOf(false) }
+    var showLoadDialog by remember { mutableStateOf(false) }
 
     val openDocumentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -81,18 +88,14 @@ fun MainScreen(
                         .padding(12.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Button(
+                    CompactButton(
                         onClick = { viewModel.pausePlayback() },
-                        colors = ButtonDefaults.buttonColors()
-                    ) {
-                        Text("Pause")
-                    }
-                    Button(onClick = {
+                        label = "Pause"
+                    )
+                    CompactButton(onClick = {
                         isFullscreen = false
                         onFullscreenChanged(false)
-                    }) {
-                        Text("Exit Fullscreen")
-                    }
+                    }, label = "Exit Fullscreen")
                 }
             }
         }
@@ -107,8 +110,7 @@ fun MainScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text("Fire Remote Player", style = MaterialTheme.typography.headlineMedium)
-            Text("Open this on your phone browser: ${state.controlUrl}")
-            Text("PIN: ${state.controlPin}")
+            Text("Control: ${state.controlUrl} | PIN: ${state.controlPin}")
 
             PlayerSurface(
                 modifier = Modifier
@@ -118,61 +120,95 @@ fun MainScreen(
                 useVlc = state.useVlc
             )
 
-            OutlinedTextField(
-                modifier = Modifier.fillMaxWidth(),
-                value = streamUrl,
-                onValueChange = { streamUrl = it },
-                label = { Text("Stream URL") },
-                placeholder = { Text("https://example.com/live.m3u8") }
-            )
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = {
-                    viewModel.loadStream(streamUrl, autoPlay = true)
-                }) {
-                    Text("Load & Play")
-                }
-                Button(onClick = {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                CompactButton(onClick = {
+                    showLoadDialog = true
+                }, label = "Load & Play")
+                CompactButton(onClick = {
                     openDocumentLauncher.launch(createLocalFileIntent())
-                }) {
-                    Text("Open File")
-                }
-                Button(onClick = { viewModel.pausePlayback() }) {
-                    Text("Pause")
-                }
-                Button(onClick = { viewModel.stopPlayback() }) {
-                    Text("Stop")
-                }
-                Button(onClick = { viewModel.adjustVolume(-0.1f) }) {
-                    Text("Vol-")
-                }
-                Button(onClick = { viewModel.adjustVolume(0.1f) }) {
-                    Text("Vol+")
-                }
-                Button(onClick = { viewModel.setVolumeLevel(0f) }) {
-                    Text("Mute")
-                }
-                Button(onClick = {
+                }, label = "Open File")
+                CompactButton(onClick = { viewModel.pausePlayback() }, label = "Pause")
+                CompactButton(onClick = { viewModel.stopPlayback() }, label = "Stop")
+                CompactButton(onClick = { viewModel.adjustVolume(-0.1f) }, label = "Vol-")
+                CompactButton(onClick = { viewModel.adjustVolume(0.1f) }, label = "Vol+")
+                CompactButton(onClick = { viewModel.setVolumeLevel(0f) }, label = "Mute")
+                CompactButton(onClick = {
                     isFullscreen = true
                     onFullscreenChanged(true)
-                }) {
-                    Text("Fullscreen")
-                }
-                Button(onClick = { viewModel.openPrimeVideoApp() }) {
-                    Text("Prime Video")
-                }
-                Button(onClick = { viewModel.bringPlayerToForegroundApp() }) {
-                    Text("Stop Prime")
-                }
-                Button(onClick = { viewModel.restartRemoteServerApp() }) {
-                    Text("Restart Network")
-                }
+                }, label = "Fullscreen")
+                CompactButton(onClick = { viewModel.togglePrimeApp() }, label = "Prime Toggle")
+                TinyButton(onClick = { viewModel.restartRemoteServerApp() }, label = "Restart Net")
             }
 
             Text(
                 "Now: ${state.lastCommand} | Playing: ${state.isPlaying} | Position: ${state.positionMs / 1000}s | Volume: ${(state.volume * 100).toInt()}%"
             )
         }
+    }
+
+    if (showLoadDialog) {
+        AlertDialog(
+            onDismissRequest = { showLoadDialog = false },
+            title = { Text("Load Stream") },
+            text = {
+                OutlinedTextField(
+                    modifier = Modifier.fillMaxWidth(),
+                    value = streamUrl,
+                    onValueChange = { streamUrl = it },
+                    label = { Text("Stream URL") },
+                    placeholder = { Text("https://example.com/live.m3u8") },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.loadStream(streamUrl, autoPlay = true)
+                    showLoadDialog = false
+                }) {
+                    Text("Load")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLoadDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun CompactButton(
+    onClick: () -> Unit,
+    label: String
+) {
+    Button(
+        onClick = onClick,
+        modifier = Modifier.height(34.dp),
+        colors = ButtonDefaults.buttonColors(),
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+    ) {
+        Text(label, style = MaterialTheme.typography.labelMedium)
+    }
+}
+
+@Composable
+private fun TinyButton(
+    onClick: () -> Unit,
+    label: String
+) {
+    Button(
+        onClick = onClick,
+        modifier = Modifier.height(30.dp),
+        colors = ButtonDefaults.buttonColors(),
+        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+    ) {
+        Text(label, style = MaterialTheme.typography.labelSmall)
     }
 }
 

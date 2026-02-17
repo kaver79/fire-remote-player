@@ -29,6 +29,7 @@ interface RemoteCommandHandler {
     fun setVolume(volume: Float)
     fun openPrimeVideo()
     fun bringPlayerToForeground()
+    fun togglePrimeVideo()
     fun restartRemoteServer()
 }
 
@@ -139,6 +140,12 @@ class HttpRemoteServer(
                     call.respond(ApiResponse(true, "player foreground requested"))
                 }
 
+                post("/api/prime/toggle") {
+                    if (!call.authorizeApiCall()) return@post
+                    handler.togglePrimeVideo()
+                    call.respond(ApiResponse(true, "prime toggle requested"))
+                }
+
                 post("/api/remote/restart") {
                     if (!call.authorizeApiCall()) return@post
                     handler.restartRemoteServer()
@@ -208,9 +215,9 @@ class HttpRemoteServer(
           <style>
             body { font-family: -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif; max-width: 980px; margin: 24px auto; padding: 0 12px; }
             h1 { margin-bottom: 8px; }
-            .row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+            .row { display: flex; gap: 8px; flex-wrap: nowrap; overflow-x: auto; margin-bottom: 10px; }
             input { flex: 1; min-width: 420px; padding: 10px; font-size: 16px; }
-            button { padding: 10px 14px; font-size: 15px; border-radius: 8px; border: 1px solid #444; background: #fafafa; }
+            button { padding: 7px 10px; font-size: 13px; border-radius: 7px; border: 1px solid #444; background: #fafafa; }
             #status { white-space: pre-wrap; background: #f1f1f1; border-radius: 8px; padding: 12px; min-height: 220px; }
           </style>
         </head>
@@ -238,8 +245,7 @@ class HttpRemoteServer(
           </div>
 
           <div class="row">
-            <button onclick="send('/api/prime/open')">Prime Video</button>
-            <button onclick="send('/api/player/foreground')">Stop Prime (Open Player)</button>
+            <button onclick="send('/api/prime/toggle')">Prime Toggle</button>
             <button onclick="send('/api/remote/restart')">Restart Network</button>
           </div>
 
