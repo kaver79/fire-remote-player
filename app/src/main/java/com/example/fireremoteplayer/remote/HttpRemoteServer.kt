@@ -31,6 +31,7 @@ interface RemoteCommandHandler {
     fun bringPlayerToForeground()
     fun togglePrimeVideo()
     fun restartRemoteServer()
+    fun setFullscreen(enabled: Boolean)
 }
 
 class HttpRemoteServer(
@@ -126,6 +127,13 @@ class HttpRemoteServer(
                     val req = call.receive<VolumeRequest>()
                     handler.setVolume(req.volume)
                     call.respond(ApiResponse(true, "volume updated"))
+                }
+
+                post("/api/fullscreen") {
+                    if (!call.authorizeApiCall()) return@post
+                    val req = call.receive<FullscreenRequest>()
+                    handler.setFullscreen(req.enabled)
+                    call.respond(ApiResponse(true, "fullscreen updated"))
                 }
 
                 post("/api/prime/open") {
@@ -242,6 +250,7 @@ class HttpRemoteServer(
             <button onclick="setVolumeDelta(-0.1)">Vol-</button>
             <button onclick="setVolumeDelta(0.1)">Vol+</button>
             <button onclick="setVolume(0)">Mute</button>
+            <button onclick="send('/api/fullscreen', { enabled: true })">Fullscreen</button>
           </div>
 
           <div class="row">

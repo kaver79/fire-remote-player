@@ -19,6 +19,11 @@ data class VolumeRequest(
 )
 
 @Serializable
+data class FullscreenRequest(
+    val enabled: Boolean
+)
+
+@Serializable
 data class ApiResponse(
     val ok: Boolean,
     val message: String

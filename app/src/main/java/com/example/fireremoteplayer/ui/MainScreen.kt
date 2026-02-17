@@ -27,6 +27,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,6 +52,7 @@ fun MainScreen(
     var streamUrl by remember { mutableStateOf("") }
     var isFullscreen by remember { mutableStateOf(false) }
     var showLoadDialog by remember { mutableStateOf(false) }
+    val remoteFullscreenCommand by viewModel.fullscreenCommand.collectAsStateWithLifecycle()
 
     val openDocumentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -72,6 +74,13 @@ fun MainScreen(
     BackHandler(enabled = isFullscreen) {
         isFullscreen = false
         onFullscreenChanged(false)
+    }
+
+    LaunchedEffect(remoteFullscreenCommand) {
+        val requested = remoteFullscreenCommand ?: return@LaunchedEffect
+        isFullscreen = requested
+        onFullscreenChanged(requested)
+        viewModel.consumeFullscreenCommand()
     }
 
     if (isFullscreen) {

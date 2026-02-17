@@ -78,6 +78,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     )
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
+    private val _fullscreenCommand = MutableStateFlow<Boolean?>(null)
+    val fullscreenCommand: StateFlow<Boolean?> = _fullscreenCommand.asStateFlow()
+
     private val positionTracker: Job
     private val remoteServer = HttpRemoteServer(
         port = REMOTE_PORT,
@@ -563,6 +566,17 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         }
     }
 
+    fun consumeFullscreenCommand() {
+        _fullscreenCommand.value = null
+    }
+
+    private fun applyFullscreen(enabled: Boolean) {
+        _fullscreenCommand.value = enabled
+        _uiState.value = _uiState.value.copy(
+            lastCommand = if (enabled) "Fullscreen on" else "Fullscreen off"
+        )
+    }
+
     private fun containsOutOfMemory(error: PlaybackException): Boolean {
         var cause: Throwable? = error
         while (cause != null) {
@@ -626,6 +640,10 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
 
     override fun restartRemoteServer() {
         restartRemoteServerApp()
+    }
+
+    override fun setFullscreen(enabled: Boolean) {
+        runOnMain { applyFullscreen(enabled) }
     }
 
     private fun runOnMain(block: () -> Unit) {
