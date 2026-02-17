@@ -250,7 +250,7 @@ class HttpRemoteServer(
             <button onclick="setVolumeDelta(-0.1)">Vol-</button>
             <button onclick="setVolumeDelta(0.1)">Vol+</button>
             <button onclick="setVolume(0)">Mute</button>
-            <button onclick="send('/api/fullscreen', { enabled: true })">Fullscreen</button>
+            <button id="fullscreenBtn" onclick="toggleFullscreen()">Fullscreen Off</button>
           </div>
 
           <div class="row">
@@ -263,6 +263,7 @@ class HttpRemoteServer(
 
           <script>
             const pin = '${safePin}';
+            let remoteFullscreen = false;
 
             async function send(path, body) {
               const response = await fetch(path, {
@@ -304,6 +305,14 @@ class HttpRemoteServer(
               if (!statusRes.ok) return;
               const s = await statusRes.json();
               await setVolume((s.volume || 0) + delta);
+            }
+
+            async function toggleFullscreen() {
+              remoteFullscreen = !remoteFullscreen;
+              await send('/api/fullscreen', { enabled: remoteFullscreen });
+              document.getElementById('fullscreenBtn').textContent = remoteFullscreen
+                ? 'Fullscreen On'
+                : 'Fullscreen Off';
             }
 
             async function refresh() {
