@@ -1,6 +1,11 @@
 package com.example.fireremoteplayer.player
 
 import android.app.Application
+import android.content.ComponentName
+import android.content.Intent
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
@@ -10,6 +15,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import com.example.fireremoteplayer.MainActivity
 import com.example.fireremoteplayer.remote.HttpRemoteServer
 import com.example.fireremoteplayer.remote.PlayerStatus
 import com.example.fireremoteplayer.remote.RemoteCommandHandler
@@ -21,6 +27,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.videolan.libvlc.LibVLC
+import org.videolan.libvlc.Media
+import org.videolan.libvlc.MediaPlayer
+import org.videolan.libvlc.util.VLCVideoLayout
+import java.io.File
+import java.io.FileOutputStream
 import java.net.Inet4Address
 import java.net.NetworkInterface
 
@@ -35,14 +47,26 @@ data class UiState(
     val lastCommand: String = "Idle",
     val volume: Float = 1f,
     val controlUrl: String = "",
-    val controlPin: String = REMOTE_PIN
+    val controlPin: String = REMOTE_PIN,
+    val useVlc: Boolean = false
 )
 
 class PlayerViewModel(application: Application) : AndroidViewModel(application), RemoteCommandHandler {
     val player: ExoPlayer = ExoPlayer.Builder(
         application,
-        DefaultRenderersFactory(application).setEnableDecoderFallback(true)
+        DefaultRenderersFactory(application)
+            .setEnableDecoderFallback(true)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
     ).build()
+
+    private var libVlc: LibVLC? = null
+    private var vlcPlayer: MediaPlayer? = null
+    private var vlcLayout: VLCVideoLayout? = null
+
+    private var currentLocalUri: Uri? = null
+    private var currentLocalLabel: String = ""
+    private val audioManager = application.getSystemService(AudioManager::class.java)
+    private var audioFocusRequest: AudioFocusRequest? = null
 
     private val _uiState = MutableStateFlow(
         UiState(
@@ -73,38 +97,104 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     init {
         player.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (_uiState.value.useVlc) return
                 _uiState.value = _uiState.value.copy(isPlaying = isPlaying)
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
+                if (_uiState.value.useVlc) return
                 val duration = if (player.duration > 0) player.duration else 0L
                 _uiState.value = _uiState.value.copy(durationMs = duration)
             }
 
             override fun onPlayerError(error: PlaybackException) {
+                val decodingError = error.errorCodeName.contains("DECODING")
+                val ioError = error.errorCodeName.contains("IO")
+                val oomError = containsOutOfMemory(error)
+                val details = error.cause?.message?.take(160)?.let { ": $it" }.orEmpty()
+
+                if ((decodingError || oomError || ioError) &&
+                    currentLocalUri != null &&
+                    !_uiState.value.useVlc
+                ) {
+                    startVlcFallback(currentLocalUri!!, currentLocalLabel)
+                    return
+                }
+
+                val hint = if (oomError) {
+                    " (out of memory while opening local file)"
+                } else if (decodingError) {
+                    " (decoder/codec unsupported on this device)"
+                } else {
+                    ""
+                }
                 _uiState.value = _uiState.value.copy(
-                    lastCommand = "Playback error: ${error.errorCodeName}"
+                    lastCommand = "Playback error: ${error.errorCodeName}$hint$details"
                 )
             }
         })
 
         positionTracker = viewModelScope.launch {
             while (true) {
-                _uiState.value = _uiState.value.copy(
-                    positionMs = player.currentPosition.coerceAtLeast(0L),
-                    durationMs = player.duration.takeIf { it > 0 } ?: 0L,
-                    isPlaying = player.isPlaying,
-                    volume = player.volume
-                )
+                val state = _uiState.value
+                if (state.useVlc) {
+                    val mp = vlcPlayer
+                    val pos = mp?.time?.coerceAtLeast(0L) ?: 0L
+                    val len = mp?.length?.takeIf { it > 0 } ?: 0L
+                    val vol = ((mp?.volume ?: 100).coerceIn(0, 100) / 100f)
+                    _uiState.value = state.copy(
+                        positionMs = pos,
+                        durationMs = len,
+                        isPlaying = mp?.isPlaying == true,
+                        volume = vol
+                    )
+                } else {
+                    _uiState.value = state.copy(
+                        positionMs = player.currentPosition.coerceAtLeast(0L),
+                        durationMs = player.duration.takeIf { it > 0 } ?: 0L,
+                        isPlaying = player.isPlaying,
+                        volume = player.volume
+                    )
+                }
                 delay(500)
             }
         }
 
-        remoteServer.start()
+        runCatching {
+            remoteServer.start()
+        }.onFailure { error ->
+            _uiState.value = _uiState.value.copy(
+                lastCommand = "Remote server error: ${error.message ?: "port busy"}"
+            )
+        }
+    }
+
+    fun bindVlcVideoLayout(layout: VLCVideoLayout) {
+        runOnMain {
+            ensureVlcPlayer()
+            if (vlcLayout !== layout) {
+                vlcPlayer?.detachViews()
+                vlcLayout = layout
+                vlcPlayer?.attachViews(layout, null, false, false)
+            }
+        }
+    }
+
+    fun unbindVlcVideoLayout(layout: VLCVideoLayout) {
+        runOnMain {
+            if (vlcLayout === layout) {
+                vlcPlayer?.detachViews()
+                vlcLayout = null
+            }
+        }
     }
 
     fun loadStream(url: String, autoPlay: Boolean = true) {
         if (url.isBlank()) return
+        currentLocalUri = null
+        currentLocalLabel = ""
+        switchToExo()
+
         val mediaItem = MediaItem.fromUri(Uri.parse(url.trim()))
         playMediaItem(
             mediaItem = mediaItem,
@@ -125,12 +215,16 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         player.playWhenReady = autoPlay
         _uiState.value = _uiState.value.copy(
             streamUrl = sourceLabel,
-            lastCommand = commandLabel
+            lastCommand = commandLabel,
+            useVlc = false
         )
     }
 
     fun loadLocalUri(uri: Uri, autoPlay: Boolean = true) {
         viewModelScope.launch(Dispatchers.IO) {
+            withContext(Dispatchers.Main.immediate) {
+                _uiState.value = _uiState.value.copy(lastCommand = "Preparing local file...")
+            }
             runCatching {
                 val app = getApplication<Application>()
                 val resolver = app.contentResolver
@@ -159,30 +253,32 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
                         else -> "bin"
                     }
 
-                val resolvedMimeType = mimeType ?: when (extension) {
-                    "mp4", "m4v", "mk4" -> "video/mp4"
-                    "mkv" -> "video/x-matroska"
-                    "avi" -> "video/x-msvideo"
-                    "m3u8" -> "application/x-mpegURL"
+                val resolvedMimeType = when {
+                    mimeType == "application/x-mpegURL" ||
+                        mimeType == "application/vnd.apple.mpegurl" ||
+                        extension == "m3u8" -> "application/x-mpegURL"
                     else -> null
                 }
 
                 val sourceLabel = displayName ?: uri.toString()
-                Triple(uri, sourceLabel, resolvedMimeType)
-            }.onSuccess { (playUri, sourceLabel, mimeType) ->
+                val cachedUri = cacheLocalContentUri(
+                    sourceUri = uri,
+                    displayName = sourceLabel,
+                    extension = extension
+                )
+                Triple(cachedUri, sourceLabel, resolvedMimeType)
+            }.onSuccess { (playUri, sourceLabel, _) ->
                 withContext(Dispatchers.Main.immediate) {
-                    val mediaItem = MediaItem.Builder()
-                        .setUri(playUri)
-                        .apply {
-                            if (!mimeType.isNullOrBlank()) setMimeType(mimeType)
-                        }
-                        .build()
-
-                    playMediaItem(
-                        mediaItem = mediaItem,
-                        sourceLabel = sourceLabel,
-                        commandLabel = "Load Local File",
-                        autoPlay = autoPlay
+                    currentLocalUri = playUri
+                    currentLocalLabel = sourceLabel
+                    // Local files are routed through VLC to avoid ExoPlayer runtime-check failures
+                    // on unsupported/unstable hardware decoder paths (e.g. Xvid/AC3 AVI).
+                    startVlcFallback(playUri, sourceLabel)
+                    if (!autoPlay) {
+                        vlcPlayer?.pause()
+                    }
+                    _uiState.value = _uiState.value.copy(
+                        lastCommand = "Load Local File (VLC)"
                     )
                 }
             }.onFailure { error ->
@@ -195,36 +291,278 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         }
     }
 
+    private fun cacheLocalContentUri(
+        sourceUri: Uri,
+        displayName: String,
+        extension: String
+    ): Uri {
+        val app = getApplication<Application>()
+        val cacheRoot = File(app.cacheDir, "local_media").apply { mkdirs() }
+
+        // Keep cache bounded to avoid storage pressure from repeated tests.
+        cacheRoot.listFiles()
+            ?.sortedByDescending { it.lastModified() }
+            ?.drop(2)
+            ?.forEach { it.delete() }
+
+        val safeName = buildString {
+            displayName.forEach { ch ->
+                append(
+                    if (ch.isLetterOrDigit() || ch == '.' || ch == '_' || ch == '-') ch else '_'
+                )
+            }
+        }.ifBlank {
+            "local_${System.currentTimeMillis()}.$extension"
+        }
+
+        val targetFile = File(cacheRoot, safeName)
+        app.contentResolver.openInputStream(sourceUri)?.use { input ->
+            FileOutputStream(targetFile).use { output ->
+                input.copyTo(output, DEFAULT_BUFFER_SIZE)
+            }
+        } ?: error("Unable to read selected file")
+
+        return Uri.fromFile(targetFile)
+    }
+
+    private fun ensureVlcPlayer() {
+        if (libVlc == null) {
+            libVlc = LibVLC(
+                getApplication(),
+                arrayListOf(
+                    "--drop-late-frames",
+                    "--skip-frames",
+                    "--avcodec-fast"
+                )
+            )
+        }
+        if (vlcPlayer == null) {
+            vlcPlayer = MediaPlayer(libVlc).also { mp ->
+                mp.setEventListener { event ->
+                    runOnMain {
+                        when (event.type) {
+                            MediaPlayer.Event.Playing -> {
+                                _uiState.value = _uiState.value.copy(isPlaying = true)
+                            }
+                            MediaPlayer.Event.Paused,
+                            MediaPlayer.Event.Stopped,
+                            MediaPlayer.Event.EndReached -> {
+                                _uiState.value = _uiState.value.copy(isPlaying = false)
+                            }
+                            MediaPlayer.Event.EncounteredError -> {
+                                _uiState.value = _uiState.value.copy(
+                                    lastCommand = "Playback error: VLC decode failed"
+                                )
+                            }
+                        }
+                    }
+                }
+                vlcLayout?.let { layout -> mp.attachViews(layout, null, false, false) }
+            }
+        }
+    }
+
+    private fun startVlcFallback(uri: Uri, sourceLabel: String) {
+        runOnMain {
+            ensureVlcPlayer()
+            player.stop()
+
+            val media = Media(libVlc, uri)
+            media.setHWDecoderEnabled(true, false)
+            vlcPlayer?.media = media
+            media.release()
+
+            vlcPlayer?.play()
+            _uiState.value = _uiState.value.copy(
+                streamUrl = sourceLabel,
+                useVlc = true,
+                isPlaying = true,
+                lastCommand = "VLC fallback (software decode)"
+            )
+        }
+    }
+
+    private fun switchToExo() {
+        vlcPlayer?.stop()
+        _uiState.value = _uiState.value.copy(useVlc = false)
+    }
+
     fun playPlayback() {
-        player.play()
+        if (_uiState.value.useVlc) {
+            vlcPlayer?.play()
+        } else {
+            player.play()
+        }
         _uiState.value = _uiState.value.copy(lastCommand = "Play")
     }
 
     fun pausePlayback() {
-        player.pause()
+        if (_uiState.value.useVlc) {
+            vlcPlayer?.pause()
+        } else {
+            player.pause()
+        }
         _uiState.value = _uiState.value.copy(lastCommand = "Pause")
     }
 
     fun stopPlayback() {
-        player.stop()
-        _uiState.value = _uiState.value.copy(lastCommand = "Stop")
+        if (_uiState.value.useVlc) {
+            vlcPlayer?.stop()
+        } else {
+            player.stop()
+        }
+        _uiState.value = _uiState.value.copy(lastCommand = "Stop", isPlaying = false)
     }
 
     fun seekTo(positionMs: Long) {
-        player.seekTo(positionMs.coerceAtLeast(0L))
+        if (_uiState.value.useVlc) {
+            vlcPlayer?.time = positionMs.coerceAtLeast(0L)
+        } else {
+            player.seekTo(positionMs.coerceAtLeast(0L))
+        }
         _uiState.value = _uiState.value.copy(lastCommand = "Seek")
     }
 
     fun setVolumeLevel(volume: Float) {
-        player.volume = volume.coerceIn(0f, 1f)
+        val clamped = volume.coerceIn(0f, 1f)
+        if (_uiState.value.useVlc) {
+            vlcPlayer?.volume = (clamped * 100).toInt().coerceIn(0, 100)
+        } else {
+            player.volume = clamped
+        }
         _uiState.value = _uiState.value.copy(
-            volume = player.volume,
-            lastCommand = "Volume ${(player.volume * 100).toInt()}%"
+            volume = clamped,
+            lastCommand = "Volume ${(clamped * 100).toInt()}%"
         )
     }
 
     fun adjustVolume(delta: Float) {
-        setVolumeLevel(player.volume + delta)
+        val current = if (_uiState.value.useVlc) {
+            ((vlcPlayer?.volume ?: 100).coerceIn(0, 100) / 100f)
+        } else {
+            player.volume
+        }
+        setVolumeLevel(current + delta)
+    }
+
+    fun openPrimeVideoApp() {
+        val app = getApplication<Application>()
+        val launchIntent = resolvePrimeLaunchIntent()
+        if (launchIntent == null) {
+            _uiState.value = _uiState.value.copy(
+                lastCommand = "Prime Video app not found"
+            )
+            return
+        }
+
+        runCatching {
+            app.startActivity(launchIntent)
+            _uiState.value = _uiState.value.copy(
+                lastCommand = "Opened Prime Video"
+            )
+        }.onFailure { error ->
+            _uiState.value = _uiState.value.copy(
+                lastCommand = "Prime open error: ${error.message ?: "unknown"}"
+            )
+        }
+    }
+
+    fun bringPlayerToForegroundApp() {
+        val app = getApplication<Application>()
+        runCatching {
+            requestExclusiveAudioFocus()
+            val intent = Intent(app, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            }
+            app.startActivity(intent)
+            _uiState.value = _uiState.value.copy(
+                lastCommand = "Player moved to foreground"
+            )
+        }.onFailure { error ->
+            _uiState.value = _uiState.value.copy(
+                lastCommand = "Foreground error: ${error.message ?: "unknown"}"
+            )
+        }
+    }
+
+    private fun requestExclusiveAudioFocus() {
+        val manager = audioManager ?: return
+        val req = audioFocusRequest ?: AudioFocusRequest.Builder(
+            AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE
+        ).setAudioAttributes(
+            AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
+                .build()
+        ).setOnAudioFocusChangeListener { }.build().also {
+            audioFocusRequest = it
+        }
+        manager.requestAudioFocus(req)
+    }
+
+    private fun resolvePrimeLaunchIntent(): Intent? {
+        val app = getApplication<Application>()
+        val pm = app.packageManager
+        val knownPackages = listOf(
+            "com.amazon.avod",
+            "com.amazon.avod.thirdpartyclient",
+            "com.amazon.amazonvideo.livingroom"
+        )
+
+        knownPackages.forEach { pkg ->
+            pm.getLaunchIntentForPackage(pkg)?.let { intent ->
+                return intent.apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            }
+        }
+
+        // Some Fire OS builds expose Prime via explicit activity only.
+        runCatching {
+            Intent(Intent.ACTION_MAIN).apply {
+                component = ComponentName(
+                    "com.amazon.avod",
+                    "com.amazon.avod.client.activity.SplashScreenActivity"
+                )
+                addCategory(Intent.CATEGORY_LAUNCHER)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        }.getOrNull()?.let { explicitIntent ->
+            val canHandle = explicitIntent.resolveActivity(pm) != null
+            if (canHandle) return explicitIntent
+        }
+        return null
+    }
+
+    fun restartRemoteServerApp() {
+        runOnMain {
+            runCatching {
+                remoteServer.stop()
+                remoteServer.start()
+                _uiState.value = _uiState.value.copy(
+                    controlUrl = "http://${resolveTabletIpAddress()}:$REMOTE_PORT",
+                    lastCommand = "Remote server restarted"
+                )
+            }.onFailure { error ->
+                _uiState.value = _uiState.value.copy(
+                    lastCommand = "Remote restart error: ${error.message ?: "unknown"}"
+                )
+            }
+        }
+    }
+
+    private fun containsOutOfMemory(error: PlaybackException): Boolean {
+        var cause: Throwable? = error
+        while (cause != null) {
+            if (cause is OutOfMemoryError) return true
+            val text = cause.message.orEmpty()
+            if (text.contains("OutOfMemoryError", ignoreCase = true)) return true
+            cause = cause.cause
+        }
+        return false
     }
 
     override fun load(url: String, autoPlay: Boolean) {
@@ -251,6 +589,18 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
         runOnMain { setVolumeLevel(volume) }
     }
 
+    override fun openPrimeVideo() {
+        runOnMain { openPrimeVideoApp() }
+    }
+
+    override fun bringPlayerToForeground() {
+        runOnMain { bringPlayerToForegroundApp() }
+    }
+
+    override fun restartRemoteServer() {
+        restartRemoteServerApp()
+    }
+
     private fun runOnMain(block: () -> Unit) {
         viewModelScope.launch(Dispatchers.Main.immediate) {
             block()
@@ -275,6 +625,17 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application),
     override fun onCleared() {
         positionTracker.cancel()
         remoteServer.stop()
+
+        vlcPlayer?.detachViews()
+        vlcPlayer?.release()
+        vlcPlayer = null
+        libVlc?.release()
+        libVlc = null
+        audioFocusRequest?.let { req ->
+            audioManager?.abandonAudioFocusRequest(req)
+        }
+        audioFocusRequest = null
+
         player.release()
         super.onCleared()
     }

@@ -20,6 +20,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,6 +33,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.ui.PlayerView
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.fireremoteplayer.player.PlayerViewModel
+import org.videolan.libvlc.util.VLCVideoLayout
 
 @Composable
 fun MainScreen(
@@ -68,14 +70,10 @@ fun MainScreen(
     if (isFullscreen) {
         Surface(modifier = Modifier.fillMaxSize()) {
             Box(modifier = Modifier.fillMaxSize()) {
-                AndroidView(
+                PlayerSurface(
                     modifier = Modifier.fillMaxSize(),
-                    factory = { context ->
-                        PlayerView(context).apply {
-                            player = viewModel.player
-                            useController = true
-                        }
-                    }
+                    viewModel = viewModel,
+                    useVlc = state.useVlc
                 )
                 Row(
                     modifier = Modifier
@@ -112,16 +110,12 @@ fun MainScreen(
             Text("Open this on your phone browser: ${state.controlUrl}")
             Text("PIN: ${state.controlPin}")
 
-            AndroidView(
+            PlayerSurface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f),
-                factory = { context ->
-                    PlayerView(context).apply {
-                        player = viewModel.player
-                        useController = true
-                    }
-                }
+                    .weight(1.25f),
+                viewModel = viewModel,
+                useVlc = state.useVlc
             )
 
             OutlinedTextField(
@@ -139,7 +133,7 @@ fun MainScreen(
                     Text("Load & Play")
                 }
                 Button(onClick = {
-                    openDocumentLauncher.launch(createLocalFileIntent(context))
+                    openDocumentLauncher.launch(createLocalFileIntent())
                 }) {
                     Text("Open File")
                 }
@@ -164,6 +158,15 @@ fun MainScreen(
                 }) {
                     Text("Fullscreen")
                 }
+                Button(onClick = { viewModel.openPrimeVideoApp() }) {
+                    Text("Prime Video")
+                }
+                Button(onClick = { viewModel.bringPlayerToForegroundApp() }) {
+                    Text("Stop Prime")
+                }
+                Button(onClick = { viewModel.restartRemoteServerApp() }) {
+                    Text("Restart Network")
+                }
             }
 
             Text(
@@ -173,7 +176,7 @@ fun MainScreen(
     }
 }
 
-private fun createLocalFileIntent(context: android.content.Context): Intent {
+private fun createLocalFileIntent(): Intent {
     val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
         addCategory(Intent.CATEGORY_OPENABLE)
         type = "*/*"
@@ -186,28 +189,51 @@ private fun createLocalFileIntent(context: android.content.Context): Intent {
     }
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        val roots = listOf("primary", "home", "0123-4567", "0000-0000")
-        val dirs = listOf("Mults", "Video", "Movies")
-
-        val initialUri = roots
-            .flatMap { root -> dirs.map { dir -> "$root:$dir" } }
-            .map { docId ->
-                DocumentsContract.buildDocumentUri(
-                    "com.android.externalstorage.documents",
-                    docId
-                )
-            }
-            .firstOrNull { uri ->
-                runCatching {
-                    context.contentResolver.query(uri, arrayOf("document_id"), null, null, null)
-                        ?.use { true } ?: false
-                }.getOrDefault(false)
-            }
-
-        if (initialUri != null) {
-            intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, initialUri)
-        }
+        // Best-effort default folder hint without probing provider URIs (which can throw
+        // permission denials on Fire OS before user grants picker access).
+        val initialUri = DocumentsContract.buildDocumentUri(
+            "com.android.externalstorage.documents",
+            "primary:Mults"
+        )
+        intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, initialUri)
     }
 
     return intent
+}
+
+@Composable
+private fun PlayerSurface(
+    modifier: Modifier,
+    viewModel: PlayerViewModel,
+    useVlc: Boolean
+) {
+    if (useVlc) {
+        var layoutRef by remember { mutableStateOf<VLCVideoLayout?>(null) }
+        AndroidView(
+            modifier = modifier,
+            factory = { context -> VLCVideoLayout(context) },
+            update = { layout ->
+                layoutRef = layout
+                viewModel.bindVlcVideoLayout(layout)
+            }
+        )
+        DisposableEffect(layoutRef) {
+            onDispose {
+                layoutRef?.let { viewModel.unbindVlcVideoLayout(it) }
+            }
+        }
+    } else {
+        AndroidView(
+            modifier = modifier,
+            factory = { context ->
+                PlayerView(context).apply {
+                    player = viewModel.player
+                    useController = true
+                }
+            },
+            update = { playerView ->
+                playerView.player = viewModel.player
+            }
+        )
+    }
 }

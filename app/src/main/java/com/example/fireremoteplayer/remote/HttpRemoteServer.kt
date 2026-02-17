@@ -27,6 +27,9 @@ interface RemoteCommandHandler {
     fun stop()
     fun seek(positionMs: Long)
     fun setVolume(volume: Float)
+    fun openPrimeVideo()
+    fun bringPlayerToForeground()
+    fun restartRemoteServer()
 }
 
 class HttpRemoteServer(
@@ -39,7 +42,10 @@ class HttpRemoteServer(
 
     fun start() {
         if (server != null) return
-        server = embeddedServer(CIO, port = port) {
+        // Fire OS may expose IPv6-only sockets by default; force IPv4 so phone can
+        // connect to http://<tablet-ipv4>:8080 on local Wi-Fi.
+        System.setProperty("java.net.preferIPv4Stack", "true")
+        server = embeddedServer(CIO, host = "0.0.0.0", port = port) {
             configure(this)
         }.start(wait = false)
     }
@@ -120,6 +126,24 @@ class HttpRemoteServer(
                     handler.setVolume(req.volume)
                     call.respond(ApiResponse(true, "volume updated"))
                 }
+
+                post("/api/prime/open") {
+                    if (!call.authorizeApiCall()) return@post
+                    handler.openPrimeVideo()
+                    call.respond(ApiResponse(true, "prime video open requested"))
+                }
+
+                post("/api/player/foreground") {
+                    if (!call.authorizeApiCall()) return@post
+                    handler.bringPlayerToForeground()
+                    call.respond(ApiResponse(true, "player foreground requested"))
+                }
+
+                post("/api/remote/restart") {
+                    if (!call.authorizeApiCall()) return@post
+                    handler.restartRemoteServer()
+                    call.respond(ApiResponse(true, "remote restarted"))
+                }
             }
         }
     }
@@ -182,12 +206,12 @@ class HttpRemoteServer(
           <meta name="viewport" content="width=device-width,initial-scale=1" />
           <title>Fire Remote Player</title>
           <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif; max-width: 680px; margin: 24px auto; padding: 0 12px; }
+            body { font-family: -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif; max-width: 980px; margin: 24px auto; padding: 0 12px; }
             h1 { margin-bottom: 8px; }
             .row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
-            input { flex: 1; min-width: 280px; padding: 10px; font-size: 16px; }
+            input { flex: 1; min-width: 420px; padding: 10px; font-size: 16px; }
             button { padding: 10px 14px; font-size: 15px; border-radius: 8px; border: 1px solid #444; background: #fafafa; }
-            #status { white-space: pre-wrap; background: #f1f1f1; border-radius: 8px; padding: 12px; }
+            #status { white-space: pre-wrap; background: #f1f1f1; border-radius: 8px; padding: 12px; min-height: 220px; }
           </style>
         </head>
         <body>
@@ -211,6 +235,12 @@ class HttpRemoteServer(
             <button onclick="setVolumeDelta(-0.1)">Vol-</button>
             <button onclick="setVolumeDelta(0.1)">Vol+</button>
             <button onclick="setVolume(0)">Mute</button>
+          </div>
+
+          <div class="row">
+            <button onclick="send('/api/prime/open')">Prime Video</button>
+            <button onclick="send('/api/player/foreground')">Stop Prime (Open Player)</button>
+            <button onclick="send('/api/remote/restart')">Restart Network</button>
           </div>
 
           <h3>Status</h3>
